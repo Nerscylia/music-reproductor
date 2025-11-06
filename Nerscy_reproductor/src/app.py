@@ -22,6 +22,10 @@ class MusicPlayerApp:
 
         pygame.mixer.init()
 
+        #Progreso de reproducción
+        self.elapsed_ms = 0 
+        self._last_tick = None
+
         #Crear ventana principal
         self.root = tk.Tk()
         self.root.title("Nerscy Music Reproductor")
@@ -36,6 +40,10 @@ class MusicPlayerApp:
         # creo la log area
 
         self.create_log_area()
+
+        # variables para controlar el fin de pista
+        self.endcheck_job = None
+        self._advancing = False
 
         # Si hay fondo lo guarda.
 
@@ -69,23 +77,21 @@ class MusicPlayerApp:
         self.current_time_label = tk.Label(self.progress_frame, text="00:00", fg="white", bg="#222")
         self.current_time_label.pack(side=tk.LEFT, padx=5)
 
-        self.progress_var = tk.DoubleVar()
-        self.progress_var = tk.Scale(
+        self.progress_var = tk.DoubleVar(value=0.0)
+        self.progress_scale = tk.Scale(
             self.progress_frame,
-            variable= self.progress_var,
-            from_=0,
-            to=100,
+            variable=self.progress_var,
+            from_=0, to=100,
             orient=tk.HORIZONTAL,
             showvalue=0,
             length=400,
             troughcolor="#444",
             bg="#222",
             highlightthickness=0,
-            sliderrelief="flat"
-            #command=self.on_seek
+            sliderrelief="flat",
+            state="disabled",   # sin seek por ahora
         )
-
-        self.progress_var.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self.progress_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
         self.total_time_label = tk.Label(self.progress_frame, text="00:00", fg="white", bg="#222")
         self.total_time_label.pack(side=tk.RIGHT, padx=5)
@@ -192,7 +198,7 @@ class MusicPlayerApp:
         #ajusta volumen
         self.volume = float(value) / 100.0
         pygame.mixer.music.set_volume(self.volume)
-        #self.add_log(f"🔊 Volumen: {int(self.volume * 100)}%") No quiero que sature el log con tanta mierda lol
+        #self.add_log(f"Volumen: {int(self.volume * 100)}%") No quiero que sature el log con tanta mierda lol
 
     def scan_wallpapers(self):
         #escaneamos los wallpapers que hay
@@ -206,16 +212,16 @@ class MusicPlayerApp:
         if not os.path.exists(img_folder):
             os.makedirs(img_folder)
 
-            self.add_log("🖼 Carpeta 'img' creada (vacía por ahora).")
+            self.add_log("Carpeta 'img' creada (vacía por ahora).")
             return
         
         images = [f for f in os.listdir(img_folder) if f.lower().endswith(valid_exts)]
 
         if not images:
-            self.add_log("⚠ No se encontraron imágenes en la carpeta 'img'.")
+            self.add_log("No se encontraron imágenes en la carpeta 'img'.")
             return
         
-        self.add_log(f"📸 {len(images)} imagen(es) encontradas:")
+        self.add_log(f"{len(images)} imagen(es) encontradas:")
 
         win = Toplevel(self.root)
         win.title("Seleccionar fondo")
@@ -232,7 +238,7 @@ class MusicPlayerApp:
         def apply_selected():
             selection =listbox.curselection()
             if not selection:
-                self.add_log("⚠ No se seleccionó ninguna imagen.")
+                self.add_log("No se seleccionó ninguna imagen.")
             selected_img = images[selection[0]]
             self.set_background(os.path.join(img_folder, selected_img))
             self.add_log(os.path.join(img_folder, selected_img))
@@ -261,7 +267,7 @@ class MusicPlayerApp:
 
             self.bg_label.lower()
             self.root.configure(bg="#000000")
-            self.add_log(f"🖼 Fondo aplicado: {os.path.basename(image_path)}")
+            self.add_log(f"Fondo aplicado: {os.path.basename(image_path)}")
 
             #guardo en la config el ultimo background usado.
             self.config.set("background_image", image_path)
@@ -269,7 +275,7 @@ class MusicPlayerApp:
 
 
         except Exception as e:
-            self.add_log(f"❌ Error al aplicar fondo: {e}")
+            self.add_log(f"Error al aplicar fondo: {e}")
 
 
 #lagea mucho, por ahora no.
@@ -286,7 +292,7 @@ class MusicPlayerApp:
         #boton para seleccionar carpeta.
         self.folder_button = tk.Button(
             self.song_frame,
-            text="📂 Seleccionar carpeta",
+            text="Seleccionar carpeta",
             command= self.select_music_folder,
             bg="#2e2e2e",
             fg ="white"
@@ -337,7 +343,7 @@ class MusicPlayerApp:
         for song in songs:
             self.song_listbox.insert(END, song)
         self.song_folder = folder
-        self.add_log(f"🎵 {len(songs)} canciones cargadas desde: {os.path.basename(folder)}")
+        self.add_log(f"{len(songs)} canciones cargadas desde: {os.path.basename(folder)}")
 
     def play_selected_song(self, event):
         selection = self.song_listbox.curselection()
@@ -346,16 +352,16 @@ class MusicPlayerApp:
             filename = self.song_listbox.get(index)
             filepath = os.path.join(self.song_folder, filename)
             self.play_music(filepath)
-            self.add_log(f"▶ Reproduciendo: {filename}")
+            self.add_log(f"Reproduciendo: {filename}")
 
     def toggle_shuffle(self):
         self.shuffle_enabled = not self.shuffle_enabled
         if self.shuffle_enabled:
             self.shuffle_button.config(text="🔀 Shuffle ON", bg="#555")
-            self.add_log("🔀 Modo aleatorio activado.")
+            self.add_log("Modo aleatorio activado.")
         else:
             self.shuffle_button.config(text="🔀 Shuffle OFF", bg="#333")
-            self.add_log("🔁 Modo aleatorio desactivado.")
+            self.add_log("Modo aleatorio desactivado.")
         # guardar en config
         self.config.set("shuffle_enabled", self.shuffle_enabled)
         self.config.save_config()
@@ -371,28 +377,28 @@ class MusicPlayerApp:
 
             if pygame.mixer.music.get_busy() and not self.is_paused:
                 if file_path and file_path != self.current_track:
-                    self.add_log(f"⏹ Deteniendo: {os.path.basename(self.current_track)}")
+                    self.add_log(f"Deteniendo: {os.path.basename(self.current_track)}")
                     pygame.mixer.music.stop()
                 else:
-                    self.add_log("⚠ Ya hay una canción reproduciéndose.")
+                    self.add_log("Ya hay una canción reproduciéndose.")
                     return
             
             if self.is_paused and (not file_path or file_path == self.current_track):
                 pygame.mixer.music.unpause()
                 self.is_paused = False
-                self.add_log("▶ Reanudado.")
+                self.add_log("Reanudado.")
                 return
             
             if not file_path:
                 if hasattr(self, "current_track") and self.current_track:
                     file_path = self.current_track
                 else:
-                    self.add_log("⚠ No hay pista seleccionada para reproducir.")
+                    self.add_log("No hay pista seleccionada para reproducir.")
                     return
             
             #Verificar que existe
             if not os.path.exists(file_path):
-                self.add_log(f"⚠ No se encontró el archivo: {file_path}")
+                self.add_log(f"No se encontró el archivo: {file_path}")
                 return
             #Se buggea, comentado por ahora
             """if self.update_progress_job:
@@ -406,95 +412,123 @@ class MusicPlayerApp:
             self.start_time = time.time()
             self.current_track = file_path
             self.is_paused = False
-            self.track_length = pygame.mixer.Sound(file_path).get_length()
-            self.total_time_label.config(text=self.format_time(self.track_length))
-            self.progress_var.set(0)
-
-
-            #comentado por bugs, esto es la barra de abajo para que trackee la musica
-            #self.update_progress()
 
             try:
                 audio = MP3(file_path)
-                self.song_length = audio.info.length
+                self.track_length = float(audio.info.length)
             except Exception:
-                self.song_length = 0
+                self.track_length = pygame.mixer.Sound(file_path).get_length()
 
-            #para hacer el fadein fadeout
+            self.total_time_label.config(text=self.format_time(self.track_length))
+            self.progress_var.set(0)
 
-            sound = pygame.mixer.Sound(file_path)
-            length_ms = int(sound.get_length() * 1000)
-            fade_start = max(0, length_ms - 3000)
+            #INICIO PROGRESO
+            self.elapsed_ms = 0
+            self._start_progress_loop()
+            #FIN PROGRESO
 
-            #cancela temporizadores previos
-
-            if self.fade_timer_id:
-                self.root.after_cancel(self.fade_timer_id)
-
-            self.fade_timer_id = self.root.after(fade_start, self.fade_and_next)
-
-
-            self.current_track = file_path
-            self.is_paused = False
-            self.add_log(f"▶ Reproduciendo: {os.path.basename(file_path)}")
+            # ---- inicio el seguimiento de la pista. ----
+            self._start_endcheck_loop()
+            # ---- Finalizo el seguimiento de la pista. ----
 
         except Exception as e:
             self.add_log(f"❌ Error al reproducir: {e}")
 
-
-    """def on_seek(self, value):
-        if not pygame.mixer.music.get_busy() or self.track_length <= 0:
-            return
         
+    def _start_endcheck_loop(self):
+            # cancela uno previo si lo hubiera y reninicia.
+            if self.endcheck_job:
+                self.root.after_cancel(self.endcheck_job)
+                self.endcheck_job = None
+            self._advancing = False
+            #Aqui se hace la primera comprobacion.
+            self.endcheck_job = self.root.after(500, self._endcheck_tick)
+
+    def _endcheck_tick(self):
         try:
+            #solo si tenemos duracion conocida
+            if hasattr(self, "track_length") and self.track_length > 0:
+                total_ms = int(self.track_length * 1000)
+                # Lo pongo "casi al final"
+                near_end = self.elapsed_ms >= max(0, total_ms - 250)
+                finished = (not self.is_paused) and (not pygame.mixer.music.get_busy()) and near_end
 
-            # calcular el nuevo tiempo a partir del porcentaje
-            seek_time = (float(value) / 100) * self.track_length
-            self.start_time = time.time() - seek_time # esto es para corregir el contador manual
-            pygame.mixer.music.play(start=seek_time) # Salta al nuevo tiempo
-            self.add_log(f"⏩ Saltado a {self.format_time(seek_time)}")
+                if finished and not self._advancing:
+                    self._advancing = True
+                    if self.endcheck_job:
+                        self.root.after_cancel(self.endcheck_job)
+                        self.endcheck_job = None
+                    self.play_next_song()
+                    return
+                
+        finally:
+            #Re-programa la comproacion.
+            self.endcheck_job = self.root.after(500, self._endcheck_tick)
 
-        except Exception as e:
-            self.add_log(f"❌ Error al saltar: {e}")"""
+    def _start_progress_loop(self):
+        #inicio bucle de actaulizacion de progreso.
+        #primero cancela uno previo si ya existe.
+
+        if self.update_progress_job:
+            self.root.after_cancel(self.update_progress_job)
+            self.update_progress_job = None
+        
+        # Marca de tiempo para acumular desde ahora.
+        self._last_tick = time.monotonic()
+        self.progress_tick() #primera iteracion
 
 
-# FUNCION PARA ACTUALIZAR EL TIEMPO DE REPRODUCCION.
-# Se buggea mucho, por el momento se queda desactivada hasta que vea como arreglarla o hacerla mejor.
-    """
-    def update_progress(self):
+    def progress_tick(self):
+
+        #esto actualiza el elapsed_ms y refresca UI; basicamente se auto-programa
         try:
-            #Si no hay cancion no hacemos nada.
-
-            if not pygame.mixer.music.get_busy() or not hasattr(self, "start_time"):
-                self.update_progress_job = self.root.after(500, self.update_progress)
+            #si en tal caso no hay pista.
+            if not hasattr(self, "track_length") or self.track_length <= 0:
+                #si no hay nada hace un reintento suave.
+                self.update_progress_job = self.root.after(250, self.progress_tick)
                 return
             
-            #saco el tiempo actual en segundos
+            # Si esta pausado, solo reprograma sin acumular.
+            if self.is_paused or not pygame.mixer.music.get_busy():
+                #mantenemos last tick actualizado, asi el delta no salta al reanudar
+                self._last_tick = time.monotonic()
+                self._refresh_progress_ui()
+                self.update_progress_job = self.root.after(250, self.progress_tick)
+                return
+            
+            #al reproducir: acumula delta desde el ultimo uso de tick
+            now = time.monotonic()
+            delta = max(0.0, (now - (self._last_tick or now)) * 1000.0)
+            self._last_tick = now
+            self.elapsed_ms += delta
 
-            elapsed_time = time.time() - self.start_time
+            #clamp para una capita de seguridad
 
-            # duracion total (menciono tambien a "track_length" por si no hay "song_length")
+            total_ms = int(self.track_length * 1000)
+            if self.elapsed_ms > total_ms:
+                self.elapsed_ms = total_ms
 
-            total_length = getattr(self, "song_length", getattr(self, "track_length", 0))
+            self._refresh_progress_ui()
+        finally:
+            # repograma la siguiente iteracion en caso de fallo.
+            self.update_progress_job = self.root.after(250, self.progress_tick)
 
-            if total_length > 0:
-                progress = min((elapsed_time / total_length) * 100, 100)
-            else:
-                progress = 0
+    
+    def _refresh_progress_ui(self):
+        #Refresca labels y slider del progreso
+        elapsed_s = max(0, int(self.elapsed_ms / 1000))
+        total_s = int(self.track_length) if self.track_length > 0 else 0
 
-            self.progress_var.set(progress)
-            self.current_time_label.config(text=self.format_time(elapsed_time))
-            self.total_time_label.config(text=self.format_time(total_length))
+        #esto son etiquetas de tiempo
+        self.current_time_label.config(text=self.format_time(elapsed_s))
+        self.total_time_label.config(text=self.format_time(total_s))
 
-        except Exception as e:
-            self.add_log(f"⚠ Error al actualizar progreso: {e}")
+        #aqui el slider
 
-        #self.update_progress_job = self.root.after(500, self.update_progress)
-
-
-            """
-
-
+        progress = 0
+        if total_s > 0:
+            progress = min(100, (elapsed_s / total_s) * 100.0)
+        self.progress_var.set(progress)
 
 # FUNCION PARA CONVERTIR LAS UNIDADES DEL TIEMPO
 
@@ -512,13 +546,14 @@ class MusicPlayerApp:
     def fade_and_next(self):
 
         try:
-            self.add_log("🔄 Transición suave a la siguiente canción...")
+            #como ya se que funciona lo comento.
+            #self.add_log("Transición suave a la siguiente canción...")
             pygame.mixer.music.fadeout(2000)
 
             self.root.after(2000, self.play_next_song)
 
         except Exception as e:
-            self.add_log(f"❌ Error en transición: {e}")
+            self.add_log(f"Error en transición: {e}")
 
     def play_next_song(self):
 
@@ -529,23 +564,36 @@ class MusicPlayerApp:
             if getattr(self, "shuffle_enabled", False):
                 #inicia la lista de canciones si no existe.
 
-                if not hasattr(self, "remaining_shuffle_songs") or not self.remaining_shuffle_song:
+                if not hasattr(self, "remaining_shuffle_songs") or not self.remaining_shuffle_songs:
                     self.remaining_shuffle_songs = list(range(self.song_listbox.size()))
                     random.shuffle(self.remaining_shuffle_songs)
-                    self.add_log("🔀 Reiniciando lista aleatoria.")
-            
+                    self.add_log("Reiniciando lista aleatoria.")
                 next_index = self.remaining_shuffle_songs.pop(0)
 
-
-            
             else:
                 current_index = self.song_listbox.curselection()
                 if not current_index:
-                    return
-            
+                    #intenta encontrar el indice de la pista actual.
+                    if hasattr(self, "current_track") and self.current_track:
+                        base = os.path.basename(self.current_track)
+                        #busca coincidencia
+                        for i in range(self.song_listbox.size()):
+                            if self.song_listbox.get(i) == base:
+                                current_index = (i,)
+                                break
+                    if not current_index:
+                        return
+
                 next_index = current_index[0]+1
                 if next_index >= self.song_listbox.size():
-                    self.add_log(("🏁 Playlist terminada."))
+                    if self.update_progress_job:
+                        self.root.after_cancel(self.update_progress_job)
+                        self.update_progress_job = None
+                    if self.endcheck_job:
+                        self.root.after_cancel(self.endcheck_job)
+                        self.endcheck_job = None
+                    self._advancing = False
+                    self.add_log(("Playlist terminada."))
                     return
             
             self.song_listbox.selection_clear(0, END)
@@ -557,34 +605,56 @@ class MusicPlayerApp:
             self.play_music(filepath)
 
         except Exception as e:
-            self.add_log(f"❌ Error al reproducir siguiente canción: {e}")        
+            self.add_log(f"Error al reproducir siguiente canción: {e}")        
 
     def pause_music(self):
         #detener musica
         if not pygame.mixer.music.get_busy() and not self.is_paused:
-            self.add_log("⚠ No hay música en reproducción.")
+            self.add_log("No hay música en reproducción.")
             return
         
         if self.is_paused:
+            #reanudar
             pygame.mixer.music.unpause()
             self.is_paused = False
-            self.add_log("▶ Reanudado.")
+            # Re-sincroniza el tick de referencia
+            self._last_tick = time.monotonic()
+            self.add_log("Reanudado.")
 
         else:
+            now = time.monotonic()
+            if self._last_tick is not None:
+                self.elapsed_ms += max(0.0, (now - self._last_tick) * 1000.0)
             pygame.mixer.music.pause()
             self.is_paused = True
-            self.add_log("⏸ Pausado.")
+            self.add_log("Pausado.")
+
+
 
     def stop_music(self):
             #stops the music
             pygame.mixer.music.stop()
-            self.add_log("⏹ Música detenida.")
+            self.add_log("Musica detenida.")
+            #cancela progreso
+            if self.update_progress_job:
+                self.root.after_cancel(self.update_progress_job)
+                self.update_progress_job = None
+            if self.endcheck_job:
+                self.root.after_cancel(self.endcheck_job)
+                self.endcheck_job = None
 
 
     def on_close(self):
         # guardar tamaño actual antes de cerrar
         self.config.set("maximized", self.root.state() == "zoomed")
         self.config.save_config()
+        # Cancela progreso
+        if self.update_progress_job:
+            self.root.after_cancel(self.update_progress_job)
+            self.update_progress_job = None
+        if self.endcheck_job:
+                self.root.after_cancel(self.endcheck_job)
+                self.endcheck_job = None
         self.root.destroy()
 
     def run(self):
